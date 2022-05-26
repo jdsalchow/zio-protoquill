@@ -1,39 +1,28 @@
 package io.getquill
 
-import scala.language.implicitConversions
-
-import io.getquill.Quoted
-
-import io.getquill.ast._
-import io.getquill.QuotationLot
-import io.getquill.QuotationVase
+import io.getquill.ast.*
 import io.getquill.context.ExecutionType
-import org.scalatest._
-import io.getquill.quat.quatOf
-import io.getquill.context.ExecutionType.Static
-import io.getquill.context.ExecutionType.Dynamic
-import io.getquill.generic.GenericDecoder
-import io.getquill.generic.GenericRowTyper
-import io.getquill.generic.GenericColumnResolver
-import scala.quoted._
-import scala.deriving._
-import scala.compiletime.{erasedValue, constValue, summonFrom}
-import scala.collection.mutable.LinkedHashMap
-import scala.reflect.ClassTag
-import scala.reflect.classTag
+import io.getquill.context.ExecutionType.{ Dynamic, Static }
 import io.getquill.context.mirror.Row
-import io.getquill.quote
-import io.getquill.query
+import io.getquill.generic.{ GenericColumnResolver, GenericDecoder, GenericRowTyper }
+import io.getquill.quat.quatOf
+import io.getquill.{ QuotationLot, QuotationVase, Quoted, query, quote }
+import org.scalatest.*
+
+import scala.collection.mutable.LinkedHashMap
+import scala.compiletime.{ constValue, erasedValue, summonFrom }
+import scala.deriving.*
+import scala.language.implicitConversions
+import scala.quoted.*
+import scala.reflect.{ ClassTag, classTag }
 
 class GenericDecoderTest extends Spec {
-  import StaticEnumExample._
-
-  val ctx = new MirrorContext[MirrorSqlDialect, Literal](MirrorSqlDialect, Literal) with MirrorColumnResolving[MirrorSqlDialect, Literal]
-  import ctx.{given, _}
-
-  case class Person(name: String, age: Int)
+  import GenericDecoderTest.*
 
   "domain-model product using row-typer" - {
+    val ctx = new MirrorContext[MirrorSqlDialect, Literal](MirrorSqlDialect, Literal) with MirrorColumnResolving[MirrorSqlDialect, Literal]
+    import ctx.{ *, given }
+
     given RowTyper[Shape] with
       def apply(row: Row) =
         row.apply[String]("type") match
@@ -54,6 +43,8 @@ class GenericDecoderTest extends Spec {
 
   "simple examples" - {
     val s = io.getquill.MirrorSession.default
+    val ctx = new MirrorContext[MirrorSqlDialect, Literal](MirrorSqlDialect, Literal) with MirrorColumnResolving[MirrorSqlDialect, Literal]
+    import ctx.{ *, given }
 
     "test tuple type" in {
       inline def q = quote { query[Person].map(p => (p.name, p.age)) }
@@ -71,8 +62,41 @@ class GenericDecoderTest extends Spec {
       result.extractor(tupleRow, s) mustEqual Person("Joe", 123)
     }
   }
+
+  "joins" - {
+    val s = io.getquill.MirrorSession.default
+    val ctx = new SqlMirrorContext[MirrorSqlDialect, Literal](MirrorSqlDialect, Literal)
+    import ctx.{ *, given }
+
+    "inner join" in {
+      inline def q = quote { query[Person].join(query[Address]).on((p, a) => p.name == a.personName)}
+      val result = ctx.run(q)
+
+       val tupleRow = Row.fromList("Joe", 123, "Joe", "Database Row 23")
+      result.extractor(tupleRow, s) mustEqual (Person("Joe", 123), Address("Joe", "Database Row 23"))
+    }
+
+    "left join (some)" in {
+      inline def q = quote { query[Person].leftJoin(query[Address]).on((p, a) => p.name == a.personName)}
+      val result = ctx.run(q)
+
+       val tupleRow = Row.fromList("Joe", 123, "Joe", "Database Row 23")
+      result.extractor(tupleRow, s) mustEqual (Person("Joe", 123), Some(Address("Joe", "Database Row 23")))
+    }
+
+    "left join (none)" in {
+      inline def q = quote { query[Person].leftJoin(query[Address]).on((p, a) => p.name == a.personName)}
+      val result = ctx.run(q)
+
+       val tupleRow = Row.fromList("Joe", 123, null, null)
+      result.extractor(tupleRow, s) mustEqual (Person("Joe", 123), None)
+    }
+  }
 }
-object StaticEnumExample {
+object GenericDecoderTest {
+  case class Person(name: String, age: Int)
+  case class Address(personName: String, street: String)
+
   enum Shape(val id: Int):
     case Square(override val id: Int, width: Int, height: Int) extends Shape(id)
     case Circle(override val id: Int, radius: Int) extends Shape(id)
